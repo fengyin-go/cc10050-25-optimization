@@ -16,11 +16,53 @@ class FailureQuarantineService(BaseModuleService):
     MODULE = "failure_quarantine"
     ENTITY = "隔离记录"
     OPERATION_TERM = "解析"
-    LIST_FIELDS = ["样本指纹", "失败阶段", "失败原因", "隔离时间", "重试次数"]
-    REQUIRED_FIELDS = ["样本指纹", "失败阶段", "失败原因"]
+    LIST_FIELDS = [
+        "样本编号", "样本指纹", "来源站点", "站点标识", "失败阶段",
+        "失败原因", "隔离时间", "重试次数",
+    ]
+    REQUIRED_FIELDS = ["样本指纹", "来源站点", "站点标识", "失败阶段", "失败原因"]
     STATUS_ORDER = ["待处理", "重试中", "已丢弃", "已恢复"]
-    ACTION_RULES = {"立即重试": "待处理", "丢弃样本": "已丢弃"}
+    ACTION_RULES = {"立即重试": "重试中", "丢弃样本": "已丢弃"}
     NEGATIVE_ACTIONS = []
+
+    def list_entries(
+        self,
+        *,
+        filters: dict[str, str] | None = None,
+        keyword: str | None = None,
+        status: str | None = None,
+        page: int = 1,
+        size: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """隔离区列表：来源站点/站点标识/失败阶段按真实值精确过滤，按 id 稳定排序后分页。
+
+        重名站点通过「站点标识」区分，模糊匹配会把其他站点或其他阶段的行卷入同批，
+        因此这里对来源与阶段字段使用等值匹配，保证翻页与候选筛选口径一致。
+        """
+        exact_fields = {"来源站点", "站点标识", "失败阶段"}
+        rows = list(store.rows(self.MODULE))
+        for field, expected in (filters or {}).items():
+            if field not in self.LIST_FIELDS:
+                continue
+            if field in exact_fields:
+                rows = [row for row in rows if str(row.get(field, "")) == expected]
+            else:
+                rows = [
+                    row for row in rows
+                    if expected.casefold() in str(row.get(field, "")).casefold()
+                ]
+        if keyword and self.LIST_FIELDS:
+            field = self.LIST_FIELDS[1]  # 样本指纹
+            rows = [
+                row for row in rows
+                if keyword.casefold() in str(row.get(field, "")).casefold()
+            ]
+        if status:
+            rows = [row for row in rows if row.get("status") == status]
+        rows.sort(key=lambda row: int(row.get("id", 0)))
+        total = len(rows)
+        start = (page - 1) * size
+        return rows[start:start + size], total
 
     # ---- 业务扩展：失败重试与恢复治理 ----
 

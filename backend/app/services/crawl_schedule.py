@@ -84,15 +84,27 @@ class CrawlScheduleService(BaseModuleService):
         }
 
     def reschedule_failed(self, entry_id: int) -> dict[str, Any]:
-        """失败计划重新排队并隔离失败上下文。"""
+        """失败计划重新排队并隔离失败上下文。
+
+        隔离项必须带样本真实来源（来源站点/站点标识）与失败阶段，才能进入恢复候选单
+        的同批筛选；站点信息从关联爬取任务的目标站点推导。
+        """
         entry = store.find(self.MODULE, entry_id)
         if entry is None or entry.get("status") != "执行失败":
             return {"ok": False, "message": "计划不存在或未失败"}
+        task_name = entry.get("关联任务", "")
+        task = next(
+            (t for t in store.rows("price_crawler") if t.get("任务名称") == task_name), None
+        )
+        site = str(task.get("目标站点", "")) if task else ""
         rows = store.rows("failure_quarantine")
         fid = max((int(r.get("id", 0)) for r in rows), default=0) + 1
         rows.append({
             "id": fid,
+            "样本编号": f"SCH-{entry_id}",
             "样本指纹": f"schedule-{entry_id}",
+            "来源站点": site,
+            "站点标识": f"SITE::{site}" if site else "",
             "失败阶段": "调度",
             "失败原因": f"计划 {entry.get('计划名称', '')} 执行失败",
             "隔离时间": datetime.now(timezone.utc).isoformat(),
